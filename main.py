@@ -1,4 +1,3 @@
-import math
 import random
 from statistics import NormalDist, mean, stdev
 
@@ -17,7 +16,8 @@ HARDEN = (10, 6)
 TIME = 100000.0
 LOW = 20.0
 HIGH = 25.0
-BINS = 10
+BINS = 20
+CHI2_CRITICAL = 27.59
 SEED = 1
 PLOT_FILE = "histogram_T.png"
 PLOT_FILE_MEASURE = "histogram_T_measure.png"
@@ -41,15 +41,16 @@ class Router:
     def blocked_full(self, total, stage):
         return not (stage == 0 and total < LOW)
 
-    def __call__(self, gear):
-        total = gear.c + gear.h
-        if not self.blocked_exit(total, gear.stage):
+    def __call__(self, gear, process, idx):
+        total = process.channel_total[idx]
+        stage = process.channel_stage[idx]
+        if not self.blocked_exit(total, stage):
             target = self.dispose
-        elif not self.blocked_partial(total, gear.stage):
+        elif not self.blocked_partial(total, stage):
             target = self.process2
         else:
             target = self.process1
-        if gear.stage == 0:
+        if stage == 0:
             self.first += 1
             if target is self.process2:
                 self.partial += 1
@@ -83,19 +84,21 @@ def run(m1, m2, cement, harden, time_limit, seed, observer=None):
     }
 
 
-def chi_square_uniform(values):
+def chi_square_normal(values):
     n = len(values)
+    dist = NormalDist(mean(values), stdev(values))
     low, high = min(values), max(values)
     width = (high - low) / BINS
     counts = [0] * BINS
     for v in values:
         counts[min(BINS - 1, int((v - low) / width))] += 1
-    expected = n / BINS
-    chi2 = sum((o - expected) ** 2 / expected for o in counts)
-    dof = BINS - 1 - 2
-    z = NormalDist().inv_cdf(0.95)
-    critical = dof * (1 - 2 / (9 * dof) + z * math.sqrt(2 / (9 * dof))) ** 3
-    return low, high, width, counts, expected, chi2, dof, critical
+    expected = []
+    for i in range(BINS):
+        left = 0.0 if i == 0 else dist.cdf(low + i * width)
+        right = 1.0 if i == BINS - 1 else dist.cdf(low + (i + 1) * width)
+        expected.append(n * (right - left))
+    chi2 = sum((o - e) ** 2 / e for o, e in zip(counts, expected))
+    return low, width, counts, expected, chi2, BINS - 3
 
 
 def plot_histogram(low, width, counts, expected, path):
@@ -109,8 +112,8 @@ def plot_histogram(low, width, counts, expected, path):
         color="#8fb8de",
         label="Спостережена частота",
     )
-    plt.axhline(
-        expected, color="#c0392b", linewidth=2, label="Рівномірний закон (гіпотеза)"
+    plt.plot(
+        centers, expected, "o-", color="#c0392b", label="Нормальний закон (гіпотеза)"
     )
     plt.xlabel("Сумарний час обробки T, хв")
     plt.ylabel("Частота")
@@ -144,18 +147,20 @@ def characteristics(cement, harden, path):
     print(f"перший сорт не менше 90%      = {yes_no(first_sort >= 0.9)}")
     print(f"T середнє                     = {mean(totals):.4f}")
     print(f"T середнє квадратичне відхил. = {stdev(totals):.4f}")
-    low, high, width, counts, expected, chi2, dof, critical = chi_square_uniform(totals)
-    print(f"гіпотеза: рівномірний закон на [{low:.2f}; {high:.2f}], {BINS} інтервалів")
+    low, width, counts, expected, chi2, dof = chi_square_normal(totals)
     print(
-        f"хі-квадрат = {chi2:.2f}, ступенів свободи = {dof}, критичне (0.05) = {critical:.2f}"
+        f"гіпотеза: нормальний закон з μ = {mean(totals):.2f}, σ = {stdev(totals):.2f}, {BINS} інтервалів"
     )
-    print(f"гіпотезу прийнято             = {yes_no(chi2 < critical)}")
+    print(
+        f"хі-квадрат = {chi2:.2f}, ступенів свободи = {dof}, критичне (0.05) = {CHI2_CRITICAL}"
+    )
+    print(f"гіпотезу прийнято             = {yes_no(chi2 < CHI2_CRITICAL)}")
     plot_histogram(low, width, counts, expected, path)
     print(f"гістограму збережено у файл {path}")
 
 
 if __name__ == "__main__":
-    print("=============== 1: ХАРАКТЕРИСТИКИ МОДЕЛІ ===============")
+    print("=============== БЛОК 1: ХАРАКТЕРИСТИКИ МОДЕЛІ ===============")
     characteristics(CEMENT, HARDEN, PLOT_FILE)
     new_cement, new_harden = experiment.research(run, CEMENT, HARDEN, LOW)
     print("\n[4] Характеристики системи із заходом")

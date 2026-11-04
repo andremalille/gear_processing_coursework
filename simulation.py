@@ -52,6 +52,8 @@ class Process(Element):
         self.key = key
         self.channel_end = [float("inf")] * channels
         self.channel_gear = [None] * channels
+        self.channel_total = [0.0] * channels
+        self.channel_stage = [0] * channels
         self.queue = deque()
         self.route = None
         self.busy_time = 0.0
@@ -67,6 +69,8 @@ class Process(Element):
         setattr(gear, self.key, t)
         self.channel_end[idx] = self.tcurr + t
         self.channel_gear[idx] = gear
+        self.channel_total[idx] = gear.c + gear.h
+        self.channel_stage[idx] = gear.stage
         self.tnext = min(self.channel_end)
 
     def in_act(self, gear):
@@ -80,11 +84,13 @@ class Process(Element):
         for idx in range(len(self.channel_end)):
             if self.channel_end[idx] == self.tcurr:
                 finished = self.channel_gear[idx]
+                target = (
+                    self.route(finished, self, idx) if self.route else self.next_element
+                )
                 self.channel_end[idx] = float("inf")
                 self.channel_gear[idx] = None
                 if self.queue:
                     self.start(idx, self.queue.popleft())
-                target = self.route(finished) if self.route else self.next_element
                 target.in_act(finished)
         self.tnext = min(self.channel_end)
 
